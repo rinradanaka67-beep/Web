@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: hshsocool-files
+    runtime: node
+    plan: starter          # ดิสก์ถาวรใช้ได้เฉพาะแผนเสียเงิน
+    startCommand: node server.js
+    disk:
+      name: files
+      mountPath: /var/data
+      sizeGB: 50
+    envVars:
+      - key: UPLOAD_DIR
+        value: /var/data/uploads
+      - key: DB_FILE
+        value: /var/data/data.json
+      - key: BASE_URL
+        value: https://hshsocoolfiles.malakor.online
+      - key: MAX_MB
+        value: "30720"
+      - key: MAX_TOTAL_GB
+        value: "45"
+      - key: ADMIN_KEY
+        sync: false        # ใส่เองในหน้า Render
+      - key: SESSION_SECRET
+        generateValue: true
