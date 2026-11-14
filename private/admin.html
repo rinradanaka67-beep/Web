@@ -1,7 +1,164 @@
 <!DOCTYPE html>
 <html lang="th"><head><meta charset="UTF-8"><meta name="robots" content="noindex, nofollow">
-<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>แอดมิน</title>
-<style>body{margin:0;min-height:100vh;display:grid;place-items:center;background:#000;color:#f1ecf7;font-family:Kanit,sans-serif}
-.c{background:#17171b;padding:32px;border-radius:24px;text-align:center}button{margin-top:16px;padding:10px 20px;border:0;border-radius:12px;background:#f7a8cf;font:inherit;cursor:pointer}</style></head>
-<body><div class="c"><h1>เข้าสู่ระบบสำเร็จ</h1><p>นี่คือหน้าแอดมิน (ใส่เนื้อหาของคุณที่นี่)</p>
-<button onclick="fetch('/api/admin/logout',{method:'POST'}).then(()=>location.href='/login')">ออกจากระบบ</button></div></body></html>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"><title>{{SITE_NAME}} · ฝากไฟล์ · แอดมิน</title>
+<link rel="icon" href="data:,">
+<link href="https://fonts.googleapis.com/css2?family=Kanit:wght@300;400;500;600&display=swap" rel="stylesheet">
+<style>
+:root{--bg:#000;--card:#0f0f12;--line:#26262d;--field:#222228;--text:#f1ecf7;--muted:#9a8fab;--accent:#f7a8cf;--err:#fb7185;--ok:#6ee7b7}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--text);font:15px Kanit,"Noto Sans Thai",sans-serif}
+.wrap{max-width:1060px;margin:0 auto;padding:30px 16px 80px}
+button{font:inherit;color:var(--text);cursor:pointer;border:1px solid var(--line);background:#111114;border-radius:12px;padding:9px 16px;display:inline-flex;align-items:center;gap:8px;transition:.15s}
+button:hover{border-color:#44444f;background:#17171b}
+button.p{border-color:#7a4a63;color:#ffd3e8;background:#1b1117}button.p:hover{background:#26151e;border-color:var(--accent)}
+button.ic{padding:7px;border:0;background:none;color:var(--muted);border-radius:8px}button.ic:hover{background:#1c1c22;color:var(--text)}button.ic.d{color:var(--err)}
+svg{width:18px;height:18px;fill:none;stroke:currentColor;stroke-width:1.8;stroke-linecap:round;stroke-linejoin:round;flex:none}
+.top{display:flex;justify-content:flex-end;margin-bottom:34px}
+.bar1{display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;margin-bottom:22px}
+.crumbs{display:flex;align-items:center;gap:6px;flex-wrap:wrap;font-weight:500;padding-left:6px}
+.crumbs a{color:var(--text);cursor:pointer;text-decoration:none}.crumbs a:hover{color:var(--accent)}.crumbs i{color:var(--muted);font-style:normal}
+.btns{display:flex;gap:10px;flex-wrap:wrap}
+.card{background:var(--card);border:1px solid var(--line);border-radius:18px}
+table{width:100%;border-collapse:collapse}
+th{font-weight:500;text-align:left;padding:18px 12px;color:var(--text);white-space:nowrap;cursor:pointer;user-select:none}th.nos{cursor:default}
+th small{color:var(--muted)}td{padding:16px 12px;border-top:1px solid var(--line)}
+tbody tr:hover{background:#131317}
+.chk{width:18px;height:18px;accent-color:var(--accent);cursor:pointer}
+.nm{display:flex;align-items:center;gap:12px;font-weight:500;word-break:break-all}.nm a{color:inherit;text-decoration:none;cursor:pointer}.nm a:hover{color:var(--accent)}
+.nm svg{color:var(--muted)}.muted{color:var(--muted);white-space:nowrap}
+.acts{display:flex;align-items:center;justify-content:flex-end;gap:2px;position:relative}
+.menu{position:absolute;right:30px;top:34px;z-index:5;background:#17171b;border:1px solid #33333c;border-radius:12px;padding:6px;min-width:190px;box-shadow:0 12px 32px #000a;display:none}
+.menu.on{display:block}.menu button{width:100%;border:0;background:none;border-radius:8px;padding:8px 10px;text-align:left}.menu button:hover{background:#24242b}
+.empty{text-align:center;color:var(--muted);padding:34px}
+.sel{display:none;align-items:center;gap:12px;padding:10px 16px;border-bottom:1px solid var(--line);color:var(--muted)}.sel.on{display:flex}
+h2{font-size:15px;font-weight:400;color:var(--muted);margin:38px 0 12px 6px}
+.rel{display:flex;justify-content:space-between;align-items:center;gap:20px;flex-wrap:wrap;padding:22px}
+.lab{color:var(--muted);font-size:13px}.ver{font-size:44px;font-weight:600;line-height:1.15;color:#ffd3e8;margin:4px 0}.sub{color:var(--muted);font-size:13px}
+.badge{display:inline-block;margin-top:12px;padding:5px 14px;border-radius:20px;font-size:13px;background:#12261e;color:var(--ok)}.badge.w{background:#2b2210;color:#fbbf24}
+.hint{margin:0 22px 14px;color:var(--muted);font-size:14px}.more{margin:0 22px 22px;color:var(--muted);font-size:14px}
+.more summary{cursor:pointer;list-style:none;display:inline-block}.more summary::-webkit-details-marker{display:none}.more[open] summary{color:var(--text)}
+.more .in{margin-top:12px;display:flex;gap:10px;flex-wrap:wrap;align-items:center}
+.pub{padding:20px 40px;font-size:15px}
+.up{position:fixed;right:16px;bottom:16px;width:min(340px,calc(100vw - 32px));display:flex;flex-direction:column;gap:8px;z-index:9}
+.u{background:#17171b;border:1px solid #33333c;border-radius:12px;padding:10px 12px;font-size:13px}.u .n{display:flex;justify-content:space-between;gap:10px;color:var(--muted)}.u .n span:first-child{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.u .b{height:5px;background:var(--field);border-radius:5px;overflow:hidden;margin-top:6px}.u .b i{display:block;height:100%;width:0;background:var(--accent)}
+.toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);background:#2a2a32;padding:10px 18px;border-radius:12px;opacity:0;transition:.3s;pointer-events:none;max-width:90vw;z-index:20}.toast.on{opacity:1}
+.drag{outline:2px dashed var(--accent);outline-offset:-8px}
+@media(max-width:700px){.col-m{display:none}.ver{font-size:36px}.pub{width:100%;padding:16px}}
+</style></head><body><div class="wrap" id="wrap">
+<div class="top"><button id="out">ออกจากระบบ</button></div>
+<div class="bar1"><div class="crumbs" id="crumbs"></div>
+<div class="btns">
+<button id="newF"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 11v5M9.5 13.5h5"/></svg>โฟลเดอร์ใหม่</button>
+<button id="upDir"><svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><path d="M12 16v-5M9.5 12.5 12 10l2.5 2.5"/></svg>อัปโหลดโฟลเดอร์</button>
+<button class="p" id="upFile"><svg viewBox="0 0 24 24"><path d="M12 16V5M7.5 9.5 12 5l4.5 4.5M5 19h14"/></svg>อัปโหลดไฟล์</button></div></div>
+
+<div class="card"><div class="sel" id="sel"><span id="selN"></span><button class="ic d" id="selDel" title="ลบที่เลือก"><svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg></button></div>
+<table><thead><tr><th class="nos" style="width:44px"><input type="checkbox" class="chk" id="all"></th>
+<th data-s="name">Name <small>⌄</small></th><th data-s="size" class="col-m">Size <small>⌄</small></th><th data-s="time" class="col-m">Modified at <small>⌄</small></th><th class="nos"></th></tr></thead>
+<tbody id="rows"></tbody></table></div>
+
+<h2>เผยแพร่อัปเดตเกม</h2>
+<div class="card"><div class="rel"><div><div class="lab">เวอร์ชันที่ผู้เล่นได้รับตอนนี้</div><div class="ver" id="ver">—</div><div class="sub" id="relsub"></div><span class="badge" id="badge" style="display:none"></span></div>
+<button class="p pub" id="pub"><svg viewBox="0 0 24 24"><path d="M12 16V5M7.5 9.5 12 5l4.5 4.5M5 19h14"/></svg>เผยแพร่อัปเดตใหม่</button></div>
+<div class="hint">กดแล้วระบบรวม <b>ไฟล์ทั้งหมด</b> ที่ฝากไว้เป็นชุดเดียว เดินเลขเวอร์ชันให้เอง ผู้เล่นโหลดครบทุกอย่าง</div>
+<details class="more"><summary>+ ใช้ไฟล์ ZIP สำเร็จรูปของตัวเอง</summary><div class="in"><button id="pubZip">เลือกไฟล์ ZIP แล้วเผยแพร่</button><button id="setVer">ตั้งเลขเวอร์ชันเอง</button>
+<span id="urls" class="sub"></span></div></details></div>
+</div>
+<div class="up" id="ups"></div><div class="toast" id="toast"></div>
+<input type="file" id="pick" multiple hidden><input type="file" id="pickDir" webkitdirectory multiple hidden><input type="file" id="pickRep" hidden><input type="file" id="pickZip" accept=".zip" hidden>
+<script>
+const $=s=>document.querySelector(s);
+const I={folder:'<svg viewBox="0 0 24 24"><path d="M3 7a2 2 0 0 1 2-2h4l2 2h8a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>',file:'<svg viewBox="0 0 24 24"><path d="M14 3H7a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V8z"/><path d="M14 3v5h5"/></svg>',eye:'<svg viewBox="0 0 24 24"><path d="M2 12s3.5-7 10-7 10 7 10 7-3.5 7-10 7S2 12 2 12z"/><circle cx="12" cy="12" r="3"/></svg>',dots:'<svg viewBox="0 0 24 24"><circle cx="12" cy="5" r="1" fill="currentColor"/><circle cx="12" cy="12" r="1" fill="currentColor"/><circle cx="12" cy="19" r="1" fill="currentColor"/></svg>',bin:'<svg viewBox="0 0 24 24"><path d="M4 7h16M9 7V4h6v3M6 7l1 13h10l1-13"/></svg>'};
+const toast=t=>{const e=$('#toast');e.textContent=t;e.classList.add('on');setTimeout(()=>e.classList.remove('on'),2400)};
+const size=n=>n<1024?n+' B':n<1048576?(n/1024).toFixed(1)+' KB':n<1073741824?(n/1048576).toFixed(1)+' MB':(n/1073741824).toFixed(2)+' GB';
+const esc=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const ago=t=>{const s=(Date.now()-t)/1000;if(s<60)return'เมื่อสักครู่';if(s<3600)return Math.floor(s/60)+' นาทีที่แล้ว';if(s<86400)return Math.floor(s/3600)+' ชั่วโมงที่แล้ว';if(s<86400*30)return Math.floor(s/86400)+' วันที่แล้ว';return new Date(t).toLocaleDateString('th-TH')};
+async function api(u,o){const r=await fetch(u,o);if(r.status===401){location.href='/login';throw 0}return r}
+const J=(m,b)=>({method:m,headers:{'Content-Type':'application/json'},body:JSON.stringify(b)});
+let D={files:[],folders:[]},cwd=decodeURIComponent(location.hash.slice(1)),sortK='name',sortD=1,picked=new Set();
+const inDir=(d,p)=>p===''||d===p||d.startsWith(p+'/');
+async function load(){D=await (await api('/api/files')).json();render();rel()}
+function items(){
+  const subs=new Map();const add=(p)=>{if(p&&p!==cwd&&inDir(p,cwd)){const rest=cwd?p.slice(cwd.length+1):p;const n=rest.split('/')[0];if(!subs.has(n))subs.set(n,{t:'d',name:n,path:(cwd?cwd+'/':'')+n,size:0,time:0})}};
+  D.folders.forEach(add);D.files.forEach(f=>add(f.dir));
+  for(const f of D.files){for(const s of subs.values())if(inDir(f.dir,s.path)){s.size+=f.size;s.time=Math.max(s.time,f.time)}}
+  const fl=D.files.filter(f=>f.dir===cwd).map(f=>({t:'f',key:f.id,...f}));
+  const L=[...subs.values()].map(s=>({...s,key:'d:'+s.path})),k=sortK;
+  const cmp=(a,b)=>(k==='name'?a.name.localeCompare(b.name,'th',{numeric:true}):(a[k]-b[k]))*sortD;
+  return [...L.sort(cmp),...fl.sort(cmp)];
+}
+function render(){
+  const parts=cwd?cwd.split('/'):[];
+  $('#crumbs').innerHTML='<a data-go="">ไฟล์ทั้งหมด</a>'+parts.map((p,i)=>'<i>/</i><a data-go="'+esc(parts.slice(0,i+1).join('/'))+'">'+esc(p)+'</a>').join('');
+  const L=items();picked=new Set([...picked].filter(k=>L.some(i=>i.key===k)));
+  $('#rows').innerHTML=L.length?L.map(i=>`<tr><td><input type="checkbox" class="chk" data-k="${esc(i.key)}" ${picked.has(i.key)?'checked':''}></td>
+  <td><div class="nm">${i.t==='d'?I.folder:I.file}<a ${i.t==='d'?`data-go="${esc(i.path)}"`:`href="${esc(i.link)}" target="_blank"`}>${esc(i.name)}</a></div></td>
+  <td class="muted col-m">${size(i.size)}</td><td class="muted col-m">${i.time?ago(i.time):'—'}</td>
+  <td><div class="acts">${i.t==='d'?`<button class="ic" data-go="${esc(i.path)}" title="เปิด">${I.eye}</button>`:`<a href="${esc(i.link)}" target="_blank"><button class="ic" title="ดู">${I.eye}</button></a>`}
+  <button class="ic" data-m="${esc(i.key)}">${I.dots}</button><button class="ic d" data-del="${esc(i.key)}" title="ลบ">${I.bin}</button>
+  <div class="menu" id="m-${esc(i.key)}">${i.t==='f'?`<button data-copy="${esc(i.link)}">คัดลอกลิงก์</button><button data-rep="${i.id}">อัปเดตไฟล์ (เปลี่ยนเนื้อหา)</button><button data-slug="${i.id}" data-cur="${esc(i.slug||'')}">ตั้งชื่อลิงก์</button>`:''}
+  <button data-ren="${esc(i.key)}">เปลี่ยนชื่อ</button><button data-mv="${esc(i.key)}">ย้ายไปโฟลเดอร์…</button></div></div></td></tr>`).join(''):'<tr><td colspan="5" class="empty">โฟลเดอร์ว่าง — อัปโหลดไฟล์หรือกด “โฟลเดอร์ใหม่”</td></tr>';
+  $('#all').checked=L.length>0&&picked.size===L.length;$('#sel').classList.toggle('on',picked.size>0);$('#selN').textContent='เลือกแล้ว '+picked.size+' รายการ';
+}
+function go(p){cwd=p;history.replaceState(0,'','#'+encodeURIComponent(p));picked.clear();render()}
+const find=k=>items().find(i=>i.key===k);
+async function delItem(i){ if(i.t==='d')return api('/api/folders?path='+encodeURIComponent(i.path),{method:'DELETE'}); return api('/api/files/'+i.id,{method:'DELETE'}) }
+document.addEventListener('click',async e=>{
+  const t=e.target.closest('button,a,th,input');const d=t&&t.dataset||{};
+  if(!e.target.closest('.acts'))document.querySelectorAll('.menu.on').forEach(m=>m.classList.remove('on'));
+  if(t&&t.dataset.go!==undefined)return go(d.go);
+  if(d.s){sortD=sortK===d.s?-sortD:1;sortK=d.s;return render()}
+  if(d.m){const m=document.getElementById('m-'+d.m),o=m.classList.contains('on');document.querySelectorAll('.menu.on').forEach(x=>x.classList.remove('on'));if(!o)m.classList.add('on');return}
+  if(d.k!==undefined){e.target.checked?picked.add(d.k):picked.delete(d.k);return render()}
+  if(t&&t.id==='all'){items().forEach(i=>e.target.checked?picked.add(i.key):picked.delete(i.key));return render()}
+  if(d.copy){try{await navigator.clipboard.writeText(d.copy);toast('คัดลอกลิงก์แล้ว')}catch{prompt('คัดลอกลิงก์:',d.copy)}}
+  if(d.rep){repId=d.rep;$('#pickRep').click()}
+  if(d.slug){const v=prompt('ชื่อลิงก์ใหม่ (เช่น api/update) เว้นว่าง = ให้ระบบสุ่ม',d.cur);if(v===null)return;const r=await api('/api/files/'+d.slug,J('PATCH',{slug:v}));const j=await r.json();r.ok?(toast('เปลี่ยนลิงก์แล้ว'),load()):toast(j.error||'ไม่สำเร็จ')}
+  if(d.ren){const i=find(d.ren),v=prompt('ชื่อใหม่',i.name);if(!v||v===i.name)return;const r=i.t==='d'?await api('/api/folders?path='+encodeURIComponent(i.path)+'&to='+encodeURIComponent((cwd?cwd+'/':'')+v),{method:'PATCH'}):await api('/api/files/'+i.id,J('PATCH',{name:v}));const j=await r.json();r.ok?load():toast(j.error||'ไม่สำเร็จ')}
+  if(d.mv){const i=find(d.mv),v=prompt('ย้ายไปโฟลเดอร์ (เช่น HSHO/maps) เว้นว่าง = หน้าแรก',cwd);if(v===null)return;const to=v.trim().replace(/^\/+|\/+$/g,'');
+    const r=i.t==='d'?await api('/api/folders?path='+encodeURIComponent(i.path)+'&to='+encodeURIComponent((to?to+'/':'')+i.name),{method:'PATCH'}):await api('/api/files/'+i.id,J('PATCH',{dir:to}));const j=await r.json();r.ok?load():toast(j.error||'ไม่สำเร็จ')}
+  if(d.del){const i=find(d.del);if(confirm(i.t==='d'?'ลบโฟลเดอร์ “'+i.name+'” พร้อมไฟล์ข้างในทั้งหมด?':'ลบไฟล์ “'+i.name+'” ถาวร? ลิงก์จะใช้ไม่ได้อีก')){await delItem(i);toast('ลบแล้ว');load()}}
+  if(t&&t.id==='selDel'&&confirm('ลบ '+picked.size+' รายการที่เลือกถาวร?')){for(const k of [...picked]){const i=find(k);if(i)await delItem(i)}picked.clear();toast('ลบแล้ว');load()}
+});
+let repId=null;
+// ---- อัปโหลด ----
+const q=[];let running=0;
+function send(url,file,label,after){q.push({url,file,label,after});pump()}
+function pump(){while(running<3&&q.length){const j=q.shift();running++;
+  const box=document.createElement('div');box.className='u';box.innerHTML=`<div class="n"><span>${esc(j.label)}</span><span class="st">0%</span></div><div class="b"><i></i></div>`;$('#ups').append(box);
+  const st=box.querySelector('.st'),x=new XMLHttpRequest();x.open('POST',j.url);
+  x.upload.onprogress=e=>{if(e.lengthComputable){const p=Math.round(e.loaded/e.total*100);st.textContent=p+'%';box.querySelector('i').style.width=p+'%'}};
+  const fin=ok=>{running--;setTimeout(()=>box.remove(),ok?1500:6000);if(ok&&!q.length&&!running){load()}pump()};
+  x.onload=()=>{if(x.status===401)return location.href='/login';let r={};try{r=JSON.parse(x.responseText)}catch{}
+    if(x.status===200){st.textContent='สำเร็จ';st.style.color='var(--ok)';j.after&&j.after();fin(true)}else{st.textContent=r.error||'ไม่สำเร็จ';st.style.color='var(--err)';fin(false)}};
+  x.onerror=()=>{st.textContent='เชื่อมต่อไม่ได้';st.style.color='var(--err)';fin(false)};
+  x.send(j.file)}}
+function uploadFiles(list){[...list].forEach(f=>{let dir=cwd;const rp=f.webkitRelativePath;if(rp&&rp.includes('/'))dir=(cwd?cwd+'/':'')+rp.split('/').slice(0,-1).join('/');
+  send('/api/upload?name='+encodeURIComponent(f.name)+'&dir='+encodeURIComponent(dir),f,(rp||f.name))})}
+$('#upFile').onclick=()=>$('#pick').click();$('#upDir').onclick=()=>$('#pickDir').click();
+$('#pick').onchange=e=>{uploadFiles(e.target.files);e.target.value=''};$('#pickDir').onchange=e=>{uploadFiles(e.target.files);e.target.value=''};
+$('#pickRep').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f&&repId)send('/api/files/'+repId+'/replace?name='+encodeURIComponent(f.name),f,'อัปเดต: '+f.name)};
+$('#newF').onclick=async()=>{const v=prompt('ชื่อโฟลเดอร์ใหม่');if(!v)return;const p=(cwd?cwd+'/':'')+v.trim();const r=await api('/api/folders?path='+encodeURIComponent(p),{method:'POST'});r.ok?load():toast((await r.json()).error||'ไม่สำเร็จ')};
+// ลากวางทั้งหน้า (รองรับโฟลเดอร์)
+const W=$('#wrap');['dragenter','dragover'].forEach(t=>W.addEventListener(t,e=>{e.preventDefault();W.classList.add('drag')}));
+['dragleave','drop'].forEach(t=>W.addEventListener(t,e=>{if(t==='drop'||e.target===W){e.preventDefault();W.classList.remove('drag')}}));
+async function walk(entry,base){if(entry.isFile)return new Promise(ok=>entry.file(f=>{f._rp=base+f.name;ok([f])}));
+  const rd=entry.createReader(),all=[];for(;;){const b=await new Promise(ok=>rd.readEntries(ok,()=>ok([])));if(!b.length)break;all.push(...b)}
+  return (await Promise.all(all.map(c=>walk(c,base+entry.name+'/')))).flat()}
+W.addEventListener('drop',async e=>{const its=[...e.dataTransfer.items||[]].map(i=>i.webkitGetAsEntry&&i.webkitGetAsEntry()).filter(Boolean);
+  const fs=its.length?(await Promise.all(its.map(en=>walk(en,'')))).flat():[...e.dataTransfer.files];
+  fs.forEach(f=>{const rp=f._rp||'';const dir=rp.includes('/')?(cwd?cwd+'/':'')+rp.split('/').slice(0,-1).join('/'):cwd;send('/api/upload?name='+encodeURIComponent(f.name)+'&dir='+encodeURIComponent(dir),f,rp||f.name)})});
+// ---- เผยแพร่อัปเดต ----
+async function rel(){const r=await (await api('/api/release')).json();
+  $('#ver').textContent=r.version?'v'+r.version:'ยังไม่เผยแพร่';
+  $('#relsub').textContent=r.published?`${r.files||'?'} ไฟล์ · ${size(r.size)} · ${new Date(r.time).toLocaleString('th-TH')}`:`ตอนนี้มี ${r.current.files} ไฟล์ · ${size(r.current.size)}`;
+  const b=$('#badge');b.style.display=r.published?'inline-block':'none';b.className='badge'+(r.upToDate?'':' w');b.textContent=r.upToDate?'เป็นเวอร์ชันล่าสุดแล้ว':'มีไฟล์เปลี่ยนแปลงที่ยังไม่เผยแพร่';
+  $('#urls').textContent=r.published?location.origin+'/api/update':''}
+$('#pub').onclick=async()=>{const desc=prompt('คำอธิบายอัปเดต (เว้นว่างได้) — กด OK เพื่อเผยแพร่ไฟล์ทั้งหมดเป็นเวอร์ชันใหม่','');if(desc===null)return;const b=$('#pub');b.disabled=true;b.style.opacity=.5;
+  try{const r=await api('/api/release/publish',J('POST',{description:desc})),j=await r.json();r.ok?toast('เผยแพร่ v'+j.version+' แล้ว'):toast(j.error||'ไม่สำเร็จ')}finally{b.disabled=false;b.style.opacity=1;rel()}};
+$('#pubZip').onclick=()=>$('#pickZip').click();
+$('#pickZip').onchange=e=>{const f=e.target.files[0];e.target.value='';if(f)send('/api/release/zip?name='+encodeURIComponent(f.name),f,'ZIP อัปเดต: '+f.name,rel)};
+$('#setVer').onclick=async()=>{const v=prompt('เลขเวอร์ชัน เช่น 4.0.71 (ครั้งถัดไปจะ +1 ท้ายสุด)');if(!v)return;const r=await api('/api/release',J('PATCH',{version:v}));const j=await r.json();r.ok?rel():toast(j.error||'ไม่สำเร็จ')};
+$('#out').onclick=()=>fetch('/api/admin/logout',{method:'POST'}).then(()=>location.href='/login');
+load();
+</script></body></html>
