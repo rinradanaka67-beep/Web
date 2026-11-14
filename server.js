@@ -1,10 +1,12 @@
-// เว็บฝากไฟล์ — ไม่ต้องติดตั้งแพ็กเกจเพิ่ม (Node 18+)
+// เว็บฝากไฟล์: แอดมินล็อกอินแล้วอัปโหลดไฟล์ได้ ไฟล์เก็บถาวรบนดิสก์ + จำรายการไฟล์ไว้
+// ไม่ต้องติดตั้งแพ็กเกจเพิ่ม (Node 18+)
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
 const crypto = require('crypto');
+const { Readable } = require('stream');
 
-// ---- โหลด .env ----
+// โหลด .env
 try {
   for (const line of fs.readFileSync(path.join(__dirname, '.env'), 'utf8').split(/\r?\n/)) {
     const m = line.match(/^\s*([A-Z0-9_]+)\s*=\s*(.*)\s*$/);
@@ -16,184 +18,323 @@ const PORT = process.env.PORT || 3000;
 const ADMIN_KEY = process.env.ADMIN_KEY;
 const SECRET = process.env.SESSION_SECRET;
 if (!ADMIN_KEY || !SECRET) { console.error('ต้องตั้ง ADMIN_KEY และ SESSION_SECRET ใน .env'); process.exit(1); }
-const MAX_BYTES = (Number(process.env.MAX_MB) || 200) * 1024 * 1024;
-const MAX_TOTAL = (Number(process.env.MAX_TOTAL_GB) || 5) * 1073741824;
-const UPLOAD_DIR = process.env.UPLOAD_DIR || path.join(__dirname, 'uploads');
-const DB_FILE = process.env.DB_FILE || path.join(__dirname, 'data.json');
-fs.mkdirSync(UPLOAD_DIR, { recursive: true });
-for (const f of fs.readdirSync(UPLOAD_DIR)) if (f.startsWith('.tmp-')) fs.unlink(path.join(UPLOAD_DIR, f), () => {});
 
-// ---- ฐานข้อมูลไฟล์ (JSON) ----
-let db = {};
-try { db = JSON.parse(fs.readFileSync(DB_FILE, 'utf8')); } catch (_) {}
-const saveDb = () => fs.writeFileSync(DB_FILE, JSON.stringify(db));
-const totalSize = () => Object.values(db).reduce((n, f) => n + f.size, 0);
-const bySlug = (slug) => Object.entries(db).find(([, f]) => f.slug === slug);
+// ---------- ที่เก็บไฟล์ ----------
+// โหมด A (แนะนำ): เก็บที่ Supabase Storage — ตั้ง SUPABASE_URL + SUPABASE_SERVICE_KEY (+ SUPABASE_BUCKET ถ้าไม่ใช้ชื่อ files)
+// โหมด B: เก็บบนดิสก์ของเซิร์ฟเวอร์ — ตั้ง DATA_DIR ให้ชี้ไปโฟลเดอร์ที่ "ถาวร" (เช่น Persistent Disk ของ Render = /var/data)
+const SB_URL = (process.env.SUPABASE_URL || '').trim().replace(/\/+$/, '');
+const SB_KEY = (process.env.SUPABASE_SERVICE_KEY || '').trim();
+const SB_BUCKET = (process.env.SUPABASE_BUCKET || 'files').trim();
+const USE_SB = !!(SB_URL && SB_KEY);
+const DATA_DIR = process.env.DATA_DIR || path.join(__dirname, 'data');
+const FILES_DIR = path.join(DATA_DIR, 'files');
+const INDEX_FILE = path.join(DATA_DIR, 'files.json');
+const MAX_BYTES = (Number(process.env.MAX_UPLOAD_MB) || (USE_SB ? 50 : 200)) * 1024 * 1024; // Supabase แพ็กเกจฟรีรับไฟล์ละไม่เกิน 50 MB
+const MAYBE_EPHEMERAL = !USE_SB && !!process.env.RENDER && !process.env.DATA_DIR; // รันบน Render แต่ไม่ได้ตั้งที่เก็บถาวร
 
-const cleanName = (n) => (String(n).replace(/[\\/:*?"<>|\x00-\x1f]/g, '_').replace(/^\.+/, '_').slice(0, 150)) || 'file';
-const RESERVED = /^(api\/(admin|files|upload)(\/|$)|login(\/|$)|admin(\/|$)|f(\/|$))/;
-const checkSlug = (slug, selfId) => {
-  if (!slug) return null;
-  if (slug.length > 100 || !/^[A-Za-z0-9._~-]+(\/[A-Za-z0-9._~-]+)*$/.test(slug)) return 'ชื่อลิงก์ใช้ได้เฉพาะ a-z 0-9 . _ - และ / (ห้ามเว้นวรรค/ภาษาไทย)';
-  if (slug.split('/').some((p) => /^\.+$/.test(p))) return 'ชื่อลิงก์ไม่ถูกต้อง';
-  if (RESERVED.test(slug)) return 'ชื่อลิงก์นี้ถูกใช้โดยระบบ';
-  const o = bySlug(slug);
-  if (o && o[0] !== selfId) return 'มีไฟล์ใช้ชื่อลิงก์นี้อยู่แล้ว';
-  return null;
+let index = [];
+
+// --- Supabase Storage (REST) ---
+const sbFetch = (pathname, opts = {}) => fetch(`${SB_URL}/storage/v1${pathname}`, {
+  ...opts,
+  headers: { apikey: SB_KEY, ...(SB_KEY.startsWith('eyJ') ? { Authorization: `Bearer ${SB_KEY}` } : {}), ...(opts.headers || {}) },
+  signal: opts.signal || AbortSignal.timeout(120000),
+});
+const sbObj = (key) => `/object/${encodeURIComponent(SB_BUCKET)}/${key.split('/').map(encodeURIComponent).join('/')}`;
+const SB_INDEX_KEY = '_index/files.json';
+const sbErr = async (r) => `Supabase ตอบ ${r.status}: ${(await r.text().catch(() => '')).slice(0, 300)}`;
+
+async function sbInit() {
+  let r = await sbFetch(`/bucket/${encodeURIComponent(SB_BUCKET)}`);
+  if (!r.ok) { // ยังไม่มี bucket -> สร้างให้ (private)
+    r = await sbFetch('/bucket', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ id: SB_BUCKET, name: SB_BUCKET, public: false }) });
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      if (!/already exists|Duplicate/i.test(t)) throw new Error(`สร้าง/ตรวจ bucket "${SB_BUCKET}" ไม่ได้ — Supabase ตอบ ${r.status}: ${t.slice(0, 300)}`);
+    }
+  }
+  const g = await sbFetch(sbObj(SB_INDEX_KEY));
+  if (g.ok) { const parsed = await g.json(); if (Array.isArray(parsed)) index = parsed; }
+  else if (g.status !== 400 && g.status !== 404) throw new Error('อ่านรายการไฟล์จาก Supabase ไม่ได้ — ' + await sbErr(g)); // ไม่เดาว่าว่างเปล่า กันเขียนทับรายการเดิม
+}
+async function sbPutIndex() {
+  const r = await sbFetch(sbObj(SB_INDEX_KEY), { method: 'POST', headers: { 'Content-Type': 'application/json', 'x-upsert': 'true' }, body: JSON.stringify(index, null, 2) });
+  if (!r.ok) throw new Error(await sbErr(r));
+}
+async function sbExistingNames() { // คืน Set ของไฟล์ที่มีอยู่จริงใน bucket หรือ null ถ้าเช็กไม่ได้
+  const names = new Set();
+  try {
+    for (let offset = 0; ; offset += 1000) {
+      const r = await sbFetch(`/object/list/${encodeURIComponent(SB_BUCKET)}`, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefix: '', limit: 1000, offset }) });
+      if (!r.ok) return null;
+      const arr = await r.json();
+      for (const o of arr) names.add(o.name);
+      if (arr.length < 1000) break;
+    }
+  } catch (_) { return null; }
+  return names;
+}
+
+// --- ดิสก์ในเครื่อง ---
+if (!USE_SB) {
+  fs.mkdirSync(FILES_DIR, { recursive: true });
+  for (const f of fs.readdirSync(FILES_DIR)) if (f.endsWith('.part')) fs.unlink(path.join(FILES_DIR, f), () => {}); // เก็บกวาดไฟล์ค้างจากอัปโหลดที่ขาดกลางทาง
+  try {
+    const parsed = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+    if (Array.isArray(parsed)) index = parsed;
+  } catch (e) {
+    if (e.code !== 'ENOENT') {
+      const backup = path.join(DATA_DIR, `files.corrupt-${Date.now()}.json`); // ไฟล์รายการเสีย: เก็บสำรองไว้ ไม่เขียนทับ
+      try { fs.renameSync(INDEX_FILE, backup); console.error('files.json เสีย ย้ายไปเก็บที่', backup); } catch (_) {}
+    }
+  }
+}
+const saveIndexLocal = () => {
+  const tmp = INDEX_FILE + '.tmp';
+  fs.writeFileSync(tmp, JSON.stringify(index, null, 2));
+  fs.renameSync(tmp, INDEX_FILE); // เขียนไฟล์ชั่วคราวก่อนแล้วสลับ กันไฟล์พังตอนไฟดับ
 };
-const INLINE = { '.png':'image/png','.jpg':'image/jpeg','.jpeg':'image/jpeg','.gif':'image/gif','.webp':'image/webp','.mp4':'video/mp4','.webm':'video/webm','.mp3':'audio/mpeg','.wav':'audio/wav','.pdf':'application/pdf','.txt':'text/plain; charset=utf-8','.json':'application/json; charset=utf-8' };
+let saveQueue = Promise.resolve(); // เรียงคิวการบันทึก ไม่ให้เขียนซ้อนกัน
+const saveIndex = () => (saveQueue = saveQueue.catch(() => {}).then(() => (USE_SB ? sbPutIndex() : saveIndexLocal())));
+const dropFromIndex = (id) => { index = index.filter(f => f.id !== id); };
 
-// ---- เซสชัน ----
+// ---------- ล็อกอินแอดมิน ----------
 const SESSION_MS = 12 * 60 * 60 * 1000;
 const sign = (v) => crypto.createHmac('sha256', SECRET).update(v).digest('hex');
-const safeEq = (a, b) => crypto.timingSafeEqual(crypto.createHash('sha256').update(String(a)).digest(), crypto.createHash('sha256').update(String(b)).digest());
+const safeEq = (a, b) => {
+  const x = crypto.createHash('sha256').update(String(a)).digest();
+  const y = crypto.createHash('sha256').update(String(b)).digest();
+  return crypto.timingSafeEqual(x, y);
+};
 const makeToken = () => { const exp = String(Date.now() + SESSION_MS); return exp + '.' + sign(exp); };
-const validToken = (t) => { if (!t) return false; const [exp, sig] = t.split('.'); return !!sig && safeEq(sig, sign(exp)) && Number(exp) > Date.now(); };
+const validToken = (t) => {
+  if (!t) return false;
+  const [exp, sig] = t.split('.');
+  return !!sig && safeEq(sig, sign(exp)) && Number(exp) > Date.now();
+};
 const cookies = (req) => Object.fromEntries((req.headers.cookie || '').split(';').map(s => s.trim().split('=')).filter(a => a[0]).map(([k, ...v]) => [k, v.join('=')]));
 const isAuthed = (req) => validToken(cookies(req).session);
 
+// จำกัดการเดารหัส: ผิด 5 ครั้งใน 10 นาที ล็อก IP นั้น
 const fails = new Map();
 const blocked = (ip) => { const f = fails.get(ip); return f && f.n >= 5 && Date.now() - f.t < 600000; };
 const addFail = (ip) => { const f = fails.get(ip); fails.set(ip, f && Date.now() - f.t < 600000 ? { n: f.n + 1, t: f.t } : { n: 1, t: Date.now() }); };
 
-// ---- ตัวช่วย ----
-const json = (res, code, obj, headers = {}) => { res.writeHead(code, { 'Content-Type': 'application/json', ...headers }); res.end(JSON.stringify(obj)); };
-const sendFile = (res, file) => fs.readFile(file, (e, d) => {
+const json = (res, code, obj, headers = {}) => { res.writeHead(code, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers }); res.end(JSON.stringify(obj)); };
+const sendFile = (res, file, type = 'text/html; charset=utf-8') => fs.readFile(file, (e, d) => {
   if (e) { res.writeHead(404); return res.end('Not found'); }
-  res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' }); res.end(d);
+  res.writeHead(200, { 'Content-Type': type, 'Cache-Control': 'no-store' }); res.end(d);
 });
 const redirect = (res, to) => { res.writeHead(302, { Location: to }); res.end(); };
-const readBody = (req, cb) => { let b = ''; req.on('data', c => { b += c; if (b.length > 5000) req.destroy(); }); req.on('end', () => { try { cb(JSON.parse(b)); } catch (_) { cb({}); } }); };
-const baseUrl = (req) => process.env.BASE_URL || ((req.headers['x-forwarded-proto'] || 'http') + '://' + req.headers.host);
-const linkOf = (req, id) => { const f = db[id]; return baseUrl(req) + (f.slug ? '/' + f.slug : '/f/' + id + '/' + encodeURIComponent(f.name)); };
 
-// รับไฟล์จาก body ลงไฟล์ชั่วคราวแบบสตรีม (ไม่กินแรม) แล้วเรียก done(tmpPath, size)
-function receive(req, res, replacingSize, done) {
-  const len = Number(req.headers['content-length'] || 0);
-  const tooBig = () => json(res, 413, { error: 'ไฟล์ใหญ่เกิน ' + MAX_BYTES / 1048576 + ' MB' });
-  if (len > MAX_BYTES) return tooBig();
-  if (totalSize() - replacingSize + len > MAX_TOTAL) return json(res, 507, { error: 'พื้นที่เซิร์ฟเวอร์เต็ม' });
-  const tmp = path.join(UPLOAD_DIR, '.tmp-' + crypto.randomBytes(8).toString('hex'));
-  const out = fs.createWriteStream(tmp);
-  let got = 0, dead = false;
-  const kill = (fn) => { if (dead) return; dead = true; out.destroy(); fs.unlink(tmp, () => {}); fn(); };
-  req.on('data', (c) => { got += c.length; if (got > MAX_BYTES) { kill(tooBig); req.destroy(); } });
-  req.on('aborted', () => kill(() => {}));
-  req.pipe(out);
-  out.on('finish', () => { if (!dead) done(tmp, got); });
-  out.on('error', () => kill(() => json(res, 500, { error: 'บันทึกไฟล์ไม่สำเร็จ' })));
+const ID_RE = /^[a-f0-9]{32}$/;
+const cleanName = (s) => String(s || '').replace(/[\u0000-\u001f\u007f]/g, '').split(/[\\/]/).pop().trim().slice(0, 200);
+
+// ---------- อัปโหลด (สตรีมลงดิสก์ ไม่โหลดทั้งไฟล์เข้าหน่วยความจำ) ----------
+function handleUpload(req, res) {
+  let name = '';
+  try { name = cleanName(decodeURIComponent(req.headers['x-filename'] || '')); } catch (_) {}
+  if (!name) return json(res, 400, { success: false, error: 'ไม่มีชื่อไฟล์' });
+  const declared = Number(req.headers['content-length'] || 0);
+  const limitMb = Math.round(MAX_BYTES / 1024 / 1024);
+  if (declared > MAX_BYTES) {
+    json(res, 413, { success: false, error: `ไฟล์ใหญ่เกิน ${limitMb} MB` }, { Connection: 'close' });
+    return res.on('finish', () => req.destroy());
+  }
+  if (USE_SB) return handleUploadSb(req, res, name, limitMb);
+
+  const id = crypto.randomBytes(16).toString('hex');
+  const finalPath = path.join(FILES_DIR, id);
+  const tmpPath = finalPath + '.part';
+  const out = fs.createWriteStream(tmpPath, { flags: 'wx' });
+  const hash = crypto.createHash('sha256');
+  let size = 0, done = false;
+
+  const abort = (code, msg) => {
+    if (done) return; done = true;
+    out.destroy(); fs.unlink(tmpPath, () => {});
+    if (res.headersSent) return;
+    json(res, code, { success: false, error: msg }, { Connection: 'close' });
+    res.on('finish', () => req.destroy());
+  };
+
+  req.on('data', (chunk) => {
+    if (done) return;
+    size += chunk.length;
+    if (size > MAX_BYTES) return abort(413, `ไฟล์ใหญ่เกิน ${limitMb} MB`);
+    hash.update(chunk);
+    if (!out.write(chunk)) { req.pause(); out.once('drain', () => req.resume()); }
+  });
+  req.on('close', () => { if (!req.complete) abort(499, 'การอัปโหลดถูกยกเลิก'); });
+  req.on('error', () => abort(400, 'การอัปโหลดผิดพลาด'));
+  out.on('error', (e) => { console.error(e); abort(500, 'เขียนไฟล์ลงดิสก์ไม่สำเร็จ'); });
+  req.on('end', () => {
+    if (done) return;
+    out.end(() => {
+      if (done) return;
+      if (size === 0) return abort(400, 'ไฟล์ว่างเปล่า');
+      done = true;
+      fs.rename(tmpPath, finalPath, (err) => {
+        if (err) { console.error(err); fs.unlink(tmpPath, () => {}); return json(res, 500, { success: false, error: 'บันทึกไฟล์ไม่สำเร็จ' }); }
+        const item = {
+          id, name, size,
+          type: String(req.headers['x-filetype'] || '').slice(0, 100),
+          sha256: hash.digest('hex'),
+          uploadedAt: new Date().toISOString(),
+        };
+        index.push(item);
+        saveIndex().then(() => json(res, 201, { success: true, file: item })).catch((e) => {
+          console.error(e); dropFromIndex(id); fs.unlink(finalPath, () => {});
+          json(res, 500, { success: false, error: 'บันทึกรายการไฟล์ไม่สำเร็จ' });
+        });
+      });
+    });
+  });
 }
 
-http.createServer((req, res) => {
+// อัปโหลดไป Supabase: รับไฟล์เข้าหน่วยความจำ (ไม่เกิน MAX_BYTES) แล้วส่งต่อทีเดียว
+function handleUploadSb(req, res, name, limitMb) {
+  const id = crypto.randomBytes(16).toString('hex');
+  const hash = crypto.createHash('sha256');
+  const chunks = [];
+  let size = 0, done = false;
+
+  const abort = (code, msg) => {
+    if (done) return; done = true; chunks.length = 0;
+    if (res.headersSent) return;
+    json(res, code, { success: false, error: msg }, { Connection: 'close' });
+    res.on('finish', () => req.destroy());
+  };
+  req.on('data', (c) => {
+    if (done) return;
+    size += c.length;
+    if (size > MAX_BYTES) return abort(413, `ไฟล์ใหญ่เกิน ${limitMb} MB`);
+    hash.update(c); chunks.push(c);
+  });
+  req.on('close', () => { if (!req.complete) abort(499, 'การอัปโหลดถูกยกเลิก'); });
+  req.on('error', () => abort(400, 'การอัปโหลดผิดพลาด'));
+  req.on('end', async () => {
+    if (done) return;
+    if (size === 0) return abort(400, 'ไฟล์ว่างเปล่า');
+    done = true;
+    const body = Buffer.concat(chunks); chunks.length = 0;
+    try {
+      const r = await sbFetch(sbObj(id), { method: 'POST', headers: { 'Content-Type': 'application/octet-stream', 'x-upsert': 'false' }, body });
+      if (!r.ok) throw new Error(await sbErr(r));
+    } catch (e) {
+      console.error('อัปโหลดไป Supabase ไม่สำเร็จ:', e.message);
+      return json(res, 502, { success: false, error: 'ส่งไฟล์ไปเก็บที่ Supabase ไม่สำเร็จ' });
+    }
+    const item = { id, name, size, type: String(req.headers['x-filetype'] || '').slice(0, 100), sha256: hash.digest('hex'), uploadedAt: new Date().toISOString() };
+    index.push(item);
+    try { await saveIndex(); }
+    catch (e) {
+      console.error('บันทึกรายการไฟล์ไป Supabase ไม่สำเร็จ:', e.message); dropFromIndex(id);
+      sbFetch(`/object/${encodeURIComponent(SB_BUCKET)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [id] }) }).catch(() => {});
+      return json(res, 500, { success: false, error: 'บันทึกรายการไฟล์ไม่สำเร็จ' });
+    }
+    json(res, 201, { success: true, file: item });
+  });
+}
+
+const server = http.createServer((req, res) => {
   const url = req.url.split('?')[0];
-  const query = new URLSearchParams(req.url.split('?')[1] || '');
   const ip = (req.headers['x-forwarded-for'] || req.socket.remoteAddress || '').split(',')[0].trim();
   const secure = req.headers['x-forwarded-proto'] === 'https' ? '; Secure' : '';
-  let pathname = url; try { pathname = decodeURIComponent(url); } catch (_) {}
 
-  // ---- ล็อกอิน / ออกจากระบบ ----
   if (req.method === 'POST' && url === '/api/admin/login') {
     if (blocked(ip)) return json(res, 429, { success: false, error: 'ลองผิดหลายครั้งเกินไป กรุณารอ 10 นาที' });
-    return readBody(req, (b) => {
-      if (b.key && safeEq(b.key, ADMIN_KEY)) {
+    let body = '';
+    req.on('data', c => { body += c; if (body.length > 2000) req.destroy(); });
+    req.on('end', () => {
+      let key = '';
+      try { key = JSON.parse(body).key || ''; } catch (_) {}
+      if (key && safeEq(key, ADMIN_KEY)) {
         fails.delete(ip);
         return json(res, 200, { success: true }, { 'Set-Cookie': `session=${makeToken()}; HttpOnly; SameSite=Strict; Path=/; Max-Age=${SESSION_MS / 1000}${secure}` });
       }
       addFail(ip);
       json(res, 401, { success: false, error: 'คีย์ไม่ถูกต้อง' });
     });
+    return;
   }
   if (req.method === 'POST' && url === '/api/admin/logout')
     return json(res, 200, { success: true }, { 'Set-Cookie': 'session=; HttpOnly; Path=/; Max-Age=0' });
 
-  // ---- ลิงก์ดาวน์โหลดสาธารณะ: /ชื่อลิงก์ที่ตั้งเอง  หรือ  /f/<id>/<ชื่อไฟล์> ----
-  if (req.method === 'GET' || req.method === 'HEAD') {
-    let id = null;
-    const custom = bySlug(pathname.replace(/^\/+/, ''));
-    if (custom) id = custom[0];
-    else { const m = url.match(/^\/f\/([\w-]+)(?:\/.*)?$/); if (m && db[m[1]]) id = m[1]; }
-    if (id) {
-      const f = db[id], inline = INLINE[path.extname(f.name).toLowerCase()];
-      res.writeHead(200, {
-        'Content-Type': inline || 'application/octet-stream',
-        'Content-Length': f.size,
-        'Content-Disposition': (inline ? 'inline' : 'attachment') + "; filename*=UTF-8''" + encodeURIComponent(f.name),
-        'Last-Modified': new Date(f.time).toUTCString(),
-        'Cache-Control': 'no-cache',   // อัปเดตไฟล์แล้วคนโหลดได้ของใหม่ทันที
-        'X-Content-Type-Options': 'nosniff',
-        'Content-Security-Policy': "default-src 'none'; sandbox",
-      });
-      if (req.method === 'HEAD') return res.end();
-      return fs.createReadStream(path.join(UPLOAD_DIR, id)).on('error', () => res.end()).pipe(res);
+  // ---------- ดาวน์โหลดผ่านลิงก์ (ใครมีลิงก์ก็โหลดได้ รหัสในลิงก์สุ่ม เดาไม่ได้) ----------
+  if (req.method === 'GET' && url.startsWith('/f/')) {
+    const id = url.slice(3);
+    const item = ID_RE.test(id) && index.find(f => f.id === id);
+    if (!item) { res.writeHead(404); return res.end('Not found'); }
+    if (USE_SB) {
+      return sbFetch(sbObj(id)).then((r) => {
+        if (!r.ok || !r.body) { res.writeHead(404); return res.end('ไม่พบไฟล์นี้ในที่เก็บ'); }
+        const h = {
+          'Content-Type': 'application/octet-stream', // บังคับให้เป็นดาวน์โหลด ไม่ให้เบราว์เซอร์รันไฟล์ HTML/JS ที่อัปโหลดมา
+          'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+          'X-Content-Type-Options': 'nosniff',
+        };
+        const len = r.headers.get('content-length'); if (len) h['Content-Length'] = len;
+        res.writeHead(200, h);
+        const s = Readable.fromWeb(r.body);
+        res.on('close', () => s.destroy());
+        s.on('error', () => res.destroy());
+        s.pipe(res);
+      }).catch((e) => { console.error('ดาวน์โหลดจาก Supabase ไม่สำเร็จ:', e.message); if (!res.headersSent) { res.writeHead(502); res.end('โหลดไฟล์ไม่สำเร็จ'); } else res.destroy(); });
     }
-  }
-
-  // ---- API ฝั่งแอดมิน (ต้องล็อกอิน) ----
-  if (url.startsWith('/api/') && !isAuthed(req)) return json(res, 401, { error: 'ยังไม่ได้ล็อกอิน' });
-
-  if (req.method === 'GET' && url === '/api/files')
-    return json(res, 200, { base: baseUrl(req), files: Object.keys(db).map(id => ({ id, ...db[id], link: linkOf(req, id) })).sort((a, b) => b.time - a.time) });
-
-  // อัปโหลดไฟล์ใหม่ (ตั้งชื่อลิงก์เองได้ด้วย ?slug=)
-  if (req.method === 'POST' && url === '/api/upload') {
-    const slug = (query.get('slug') || '').trim().replace(/^\/+|\/+$/g, '');
-    const err = checkSlug(slug, null);
-    if (err) return json(res, 400, { error: err });
-    const name = cleanName(query.get('name') || 'file');
-    return receive(req, res, 0, (tmp, size) => {
-      if (slug && bySlug(slug)) { fs.unlink(tmp, () => {}); return json(res, 400, { error: 'มีไฟล์ใช้ชื่อลิงก์นี้อยู่แล้ว' }); }
-      const id = crypto.randomBytes(9).toString('base64url');
-      fs.rename(tmp, path.join(UPLOAD_DIR, id), (e) => {
-        if (e) return json(res, 500, { error: 'บันทึกไฟล์ไม่สำเร็จ' });
-        db[id] = { name, size, time: Date.now(), ip, ...(slug ? { slug } : {}) }; saveDb();
-        json(res, 200, { success: true, id, link: linkOf(req, id) });
+    const file = path.join(FILES_DIR, id);
+    return fs.stat(file, (e, st) => {
+      if (e) { res.writeHead(404); return res.end('ไม่พบไฟล์นี้บนเซิร์ฟเวอร์'); }
+      res.writeHead(200, {
+        'Content-Type': 'application/octet-stream', // บังคับให้เป็นดาวน์โหลด ไม่ให้เบราว์เซอร์รันไฟล์ HTML/JS ที่อัปโหลดมา
+        'Content-Disposition': `attachment; filename*=UTF-8''${encodeURIComponent(item.name)}`,
+        'Content-Length': st.size,
+        'X-Content-Type-Options': 'nosniff',
       });
+      fs.createReadStream(file).on('error', () => res.destroy()).pipe(res);
     });
   }
 
-  // อัปเดตไฟล์ (เปลี่ยนเนื้อหา ลิงก์เดิมยังใช้ได้)
-  const rep = url.match(/^\/api\/files\/([\w-]+)\/replace$/);
-  if (req.method === 'POST' && rep) {
-    const id = rep[1];
-    if (!db[id]) return json(res, 404, { error: 'ไม่พบไฟล์' });
-    const name = query.get('name') ? cleanName(query.get('name')) : db[id].name;
-    return receive(req, res, db[id].size, (tmp, size) => {
-      if (!db[id]) { fs.unlink(tmp, () => {}); return json(res, 404, { error: 'ไฟล์ถูกลบไปแล้ว' }); }
-      fs.rename(tmp, path.join(UPLOAD_DIR, id), (e) => {
-        if (e) return json(res, 500, { error: 'บันทึกไฟล์ไม่สำเร็จ' });
-        Object.assign(db[id], { name, size, time: Date.now() }); saveDb();
-        json(res, 200, { success: true, id, link: linkOf(req, id) });
+  // ---------- API ไฟล์ (ต้องล็อกอินแอดมิน) ----------
+  if (url === '/api/files' || url.startsWith('/api/files/')) {
+    if (!isAuthed(req)) return json(res, 401, { success: false, error: 'กรุณาเข้าสู่ระบบ' });
+    const id = url.startsWith('/api/files/') ? url.slice('/api/files/'.length) : null;
+
+    if (req.method === 'GET' && !id) {
+      return (USE_SB ? sbExistingNames() : Promise.resolve(null)).then((names) => {
+        // missing = มีในรายการแต่ไฟล์จริงหาย (ถ้าเช็กกับ Supabase ไม่ได้ จะไม่ติดป้ายหาย)
+        const exists = (f) => USE_SB ? (names ? names.has(f.id) : true) : fs.existsSync(path.join(FILES_DIR, f.id));
+        const files = index.map(f => ({ ...f, missing: !exists(f) }));
+        json(res, 200, { success: true, files, maxMb: Math.round(MAX_BYTES / 1024 / 1024), maybeEphemeral: MAYBE_EPHEMERAL });
       });
-    });
+    }
+    if (req.method === 'POST' && !id) return handleUpload(req, res);
+
+    if (req.method === 'DELETE' && id) {
+      const i = ID_RE.test(id) ? index.findIndex(f => f.id === id) : -1;
+      if (i < 0) return json(res, 404, { success: false, error: 'ไม่พบไฟล์' });
+      const [removed] = index.splice(i, 1);
+      return saveIndex().then(() => {
+        if (USE_SB) sbFetch(`/object/${encodeURIComponent(SB_BUCKET)}`, { method: 'DELETE', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ prefixes: [id] }) }).catch((e) => console.error('ลบไฟล์ที่ Supabase ไม่สำเร็จ:', e.message));
+        else fs.unlink(path.join(FILES_DIR, id), () => {});
+        json(res, 200, { success: true });
+      }).catch((e) => {
+        console.error(e); index.splice(Math.min(i, index.length), 0, removed);
+        json(res, 500, { success: false, error: 'บันทึกรายการไม่สำเร็จ' });
+      });
+    }
+    return json(res, 405, { success: false, error: 'ไม่รองรับคำสั่งนี้ (ไฟล์ที่ฝากแล้วแก้ไข/เขียนทับไม่ได้)' });
   }
 
-  // แก้ชื่อลิงก์ (slug ว่าง = กลับไปใช้ลิงก์อัตโนมัติ)
-  const pat = url.match(/^\/api\/files\/([\w-]+)$/);
-  if (req.method === 'PATCH' && pat) {
-    const id = pat[1];
-    if (!db[id]) return json(res, 404, { error: 'ไม่พบไฟล์' });
-    return readBody(req, (b) => {
-      const slug = String(b.slug || '').trim().replace(/^\/+|\/+$/g, '');
-      const err = checkSlug(slug, id);
-      if (err) return json(res, 400, { error: err });
-      if (slug) db[id].slug = slug; else delete db[id].slug;
-      saveDb(); json(res, 200, { success: true, link: linkOf(req, id) });
-    });
-  }
-
-  if (req.method === 'DELETE' && pat) {
-    if (db[pat[1]]) { fs.unlink(path.join(UPLOAD_DIR, pat[1]), () => {}); delete db[pat[1]]; saveDb(); }
-    return json(res, 200, { success: true });
-  }
-
-  // ---- หน้าเว็บ ----
   if (url === '/login' || url === '/login.html') return sendFile(res, path.join(__dirname, 'public', 'login.html'));
-  if (url === '/') return redirect(res, '/admin');
-  if (url === '/admin') return isAuthed(req) ? sendFile(res, path.join(__dirname, 'private', 'admin.html')) : redirect(res, '/login');
+  if (url === '/') return isAuthed(req) ? sendFile(res, path.join(__dirname, 'private', 'admin.html')) : redirect(res, '/login');
   res.writeHead(404); res.end('Not found');
-}).listen(PORT, function () {
-  this.requestTimeout = 0;   // ไม่ตัดอัปโหลดไฟล์ใหญ่
-  this.headersTimeout = 60000;
-  this.timeout = 0;
-  console.log('เปิดที่ http://localhost:' + PORT);
 });
+
+(async () => {
+  if (USE_SB) {
+    try { await sbInit(); }
+    catch (e) { console.error('เชื่อมต่อ Supabase ไม่สำเร็จ:', e.message, '\nตรวจ SUPABASE_URL / SUPABASE_SERVICE_KEY / SUPABASE_BUCKET'); process.exit(1); }
+  }
+  server.listen(PORT, () => console.log('เปิดที่ http://localhost:' + PORT + ' | เก็บไฟล์ที่ ' + (USE_SB ? `Supabase bucket "${SB_BUCKET}" (${index.length} ไฟล์ในรายการ)` : DATA_DIR)));
+})();
